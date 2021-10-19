@@ -1,57 +1,40 @@
 pipeline {
-    agent any
-
-    parameters {
-        string(name: 'environment', defaultValue: 'default', description: 'Workspace/environment file to use for deployment')
-        string(name: 'version', defaultValue: '', description: 'Version variable to pass to Terraform')
-        booleanParam(name: 'autoApprove', defaultValue: false, description: 'Automatically run apply after generating plan?')
+  parameters {
+    password (name: 'AWS_ACCESS_KEY_ID')
+    password (name: 'AWS_SECRET_ACCESS_KEY')
+  }
+  environment {
+    TF_WORKSPACE = 'dev' //Sets the Terraform Workspace
+    TF_IN_AUTOMATION = 'true'
+    AWS_ACCESS_KEY_ID = "${params.AWS_ACCESS_KEY_ID}"
+    AWS_SECRET_ACCESS_KEY = "${params.AWS_SECRET_ACCESS_KEY}"
+  }
+  stages {
+    stage('Terraform Init') {
+      steps {
+        sh "${env.TERRAFORM_HOME}/terraform init -input=false"
+      }
     }
-    
-    environment {
-          access_key = "AKIATPR6EBOHZDIAS5K2"
-          secret_key = "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"
-        TF_IN_AUTOMATION      = '1'
+    stage('Terraform Plan') {
+      steps {
+        sh "${env.TERRAFORM_HOME}/terraform plan -out=tfplan -input=false -var-file='dev.tfvars'"
+      }
     }
-
-    stages {
-        stage('Plan') {
-            steps {
-                script {
-                    currentBuild.displayName = params.version
-                }
-                sh 'terraform init -input=false'
-                sh 'terraform workspace select ${environment}'
-                sh "terraform plan -input=false -out tfplan -var 'version=${params.version}' --var-file=environments/${params.environment}.tfvars"
-                sh 'terraform show -no-color tfplan > tfplan.txt'
-            }
-        }
-
-        stage('Approval') {
-            when {
-                not {
-                    equals expected: true, actual: params.autoApprove
-                }
-            }
-
-            steps {
-                script {
-                    def plan = readFile 'tfplan.txt'
-                    input message: "Do you want to apply the plan?",
-                        parameters: [text(name: 'Plan', description: 'Please review the plan', defaultValue: plan)]
-                }
-            }
-        }
-
-        stage('Apply') {
-            steps {
-                sh "terraform apply -input=false tfplan"
-            }
-        }
-    }  
-
-    post {
-        always {
-            archiveArtifacts artifacts: 'tfplan.txt'
-        }
+    stage('Terraform Apply') {
+      steps {
+        input 'Apply Plan'
+        sh "${env.TERRAFORM_HOME}/terraform apply -input=false tfplan"
+      }
     }
+    stage('AWSpec Tests') {
+      steps {
+          sh '''#!/bin/bash -l
+bundle install --path ~/.gem
+bundle exec rake spec || true
+'''
+
+        junit(allowEmptyResults: true, testResults: '**/testResults/*.xml')
+      }
+    }
+  }
 }
